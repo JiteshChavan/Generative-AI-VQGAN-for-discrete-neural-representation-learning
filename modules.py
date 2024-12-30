@@ -39,3 +39,24 @@ class ResidualBlock (nn.Module):
             return self.channel_up(X) + self.block(X)
         else:
             return X + self.block(X)
+
+class UpSampleBlock (nn.Module):
+    def __init__(self, channels, factor=2.0):
+        super().__init__()
+        self.conv = nn.Conv2d (channels, channels, kernel_size=3, stride=1, padding=1)
+        self.factor = factor
+    def forward (self, X):
+        X = F.interpolate (X, scale_factor=self.factor)
+        return self.conv(X)
+
+class DownSampleBlock (nn.Module):
+    def __init__(self, channels, factor=2):
+        super().__init__()
+        self.conv = nn.Conv2d (channels, channels, kernel_size=3, stride=factor, padding=0)
+    
+    def forward (self, X):
+        X = F.pad (X, (0, 1, 0, 1), mode='constant', value=0) # Kernel size 3 makes it so that stride = 2 gives you one less than half the size so one extra row and column to fix it
+        return self.conv (X)
+
+class NonLocalBlock (nn.Module):
+    pass
