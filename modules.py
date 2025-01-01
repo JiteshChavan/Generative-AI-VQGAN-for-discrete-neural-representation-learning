@@ -19,22 +19,30 @@ class Swish (nn.Module):
         return X * torch.sigmoid(X)
 
 class ResidualBlock (nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, config):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
+
+        kernel_size = config.res_kernel_size
+        stride = config.res_stride
+        padding = config.res_padding
+
+        channel_up_kernel_size=config.channel_up_kernel_size
+        channel_up_stride = config.channel_up_stride
+        channel_up_padding = config.channel_up_padding
         
         self.block = nn.Sequential (
             GroupNorm (in_channels),
             Swish (),
-            nn.Conv2d (in_channels, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d (in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
             GroupNorm (out_channels),
             Swish (),
-            nn.Conv2d (out_channels, out_channels, kernel_size=3, stride=1, padding=1) # Project back into residual pathway
+            nn.Conv2d (out_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding) # Project back into residual pathway
         )
 
         if in_channels != out_channels:
-            self.channel_up = nn.Conv2d (in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+            self.channel_up = nn.Conv2d (in_channels, out_channels, kernel_size=channel_up_kernel_size, stride=channel_up_stride, padding=channel_up_padding)
     
     def forward (self, X):
 
@@ -53,9 +61,13 @@ class UpSampleBlock (nn.Module):
         return self.conv(X)
 
 class DownSampleBlock (nn.Module):
-    def __init__(self, channels, factor=2):
+    def __init__(self, channels, config):
         super().__init__()
-        self.conv = nn.Conv2d (channels, channels, kernel_size=3, stride=factor, padding=0)
+        kernel_size = config.d_sample_kernel_size
+        d_sample_factor = config.d_sample_factor
+        padding = config.d_sample_padding
+        
+        self.conv = nn.Conv2d (channels, channels, kernel_size=kernel_size, stride=d_sample_factor, padding=padding)
     
     def forward (self, X):
         X = F.pad (X, (0, 1, 0, 1), mode='constant', value=0) # Kernel size 3 makes it so that stride = 2 gives you one less than half the size so one extra row and column to fix it
@@ -64,16 +76,26 @@ class DownSampleBlock (nn.Module):
 
 # TODO:  incorporate pos embedding in the network itself 
 class SelfAttention (nn.Module):
-    def __init__(self, channels, n_head):
+    def __init__(self, channels, config):
+
         super().__init__()
+        
+        att_kernel_size=config.att_kernel_size
+        att_stride = config.att_stride
+        att_padding = config.att_padding
+        proj_kernel_size = config.proj_kernel_size
+        proj_stride = config.proj_stride
+        proj_padding = config.proj_padding
+
+        self.n_head = config.n_head
         self.channels = channels
-        self.n_head = n_head
-        assert channels % n_head == 0, f"Specified channels:{channels} are not divisible by number of attention heads{n_head}"
+
+        assert channels % self.n_head == 0, f"Specified channels:{channels} are not divisible by number of attention heads{self.n_head}"
         # norm
         self.group_norm = GroupNorm (channels)
         # attention
-        self.conv_attention = nn.Conv2d (channels, 3 * channels, kernel_size=3, stride=1, padding=1)
-        self.conv_projection = nn.Conv2d (channels, channels, kernel_size=1, stride=1, padding=0)
+        self.conv_attention = nn.Conv2d (channels, 3 * channels, kernel_size=att_kernel_size, stride=att_stride, padding=att_padding)
+        self.conv_projection = nn.Conv2d (channels, channels, kernel_size=proj_kernel_size, stride=proj_stride, padding=proj_padding)
     
     def forward (self, X):
         B, C, H, W = X.size()
