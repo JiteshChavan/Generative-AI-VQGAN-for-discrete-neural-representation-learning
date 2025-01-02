@@ -50,7 +50,7 @@ class EncoderConfig:
     # down sample configs
     d_sample_kernel_size : int = 3
     d_sample_factor = 2 # (specifies stride)
-    d_sample_padding : int = 1
+    d_sample_padding : int = 0
 
 
 
@@ -81,12 +81,13 @@ class Encoder (nn.Module):
                 out_channels = 2 * in_channels
 
 
-        layers.append (ResidualBlock (out_channels, out_channels, config))
-        layers.append (SelfAttention (out_channels, config))
-        layers.append (ResidualBlock (out_channels, out_channels, config))
-        layers.append (GroupNorm (out_channels))
+        layers.append (ResidualBlock (in_channels, in_channels, config))
+        layers.append (SelfAttention (in_channels, config))
+        layers.append (ResidualBlock (in_channels, in_channels, config))
+        
+        layers.append (GroupNorm (in_channels))
         layers.append (Swish())
-        layers.append (nn.Conv2d(out_channels, config.latent_dim, kernel_size=config.conv_kernel_size, stride=config.conv_stride, padding=config.conv_padding))
+        layers.append (nn.Conv2d(in_channels, config.latent_dim, kernel_size=config.conv_kernel_size, stride=config.conv_stride, padding=config.conv_padding))
         
         self.latent_activation = nn.Sequential(*layers)
 
