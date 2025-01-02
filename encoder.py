@@ -89,21 +89,18 @@ class Encoder (nn.Module):
         layers.append (Swish())
         layers.append (nn.Conv2d(in_channels, config.latent_dim, kernel_size=config.conv_kernel_size, stride=config.conv_stride, padding=config.conv_padding))
         
-        self.latent_activation = nn.Sequential(*layers)
+        self.model = nn.Sequential(*layers)
 
-        self.mu_conv = nn.Conv2d (config.latent_dim, config.latent_dim, kernel_size=1, stride=1, padding=0)
-        self.log_var_conv = nn.Conv2d (config.latent_dim, config.latent_dim, kernel_size=1, stride=1, padding=0)
-
-    def reparametrize (self, mu, log_var):
-        eps = torch.randn_like (mu) # shape should be same as mu and log_var (B, latent_dim, latent_resolution, latent_resolution)
-        std = torch.exp (0.5* F.softplus(log_var))
-        out = mu + eps * std
-        return out
+    # don't need to explicitly sample ze from N(u,sigma), quantizer already snaps similar zes to same zq
+    # which sort of already organizes the latent space via quantization and commitment loss gradients
+    # so if we sample zes from posterior ze|x we get zq and reconstructing this zq gives meaningful variations from p(x)
+    #def reparametrize (self, mu, log_var):
+    #    eps = torch.randn_like (mu) # shape should be same as mu and log_var (B, latent_dim, latent_resolution, latent_resolution)
+    #    std = torch.exp (0.5* F.softplus(log_var))
+    #    out = mu + eps * std
+    #    return out
     
     def forward (self, X):
-        latent_activation = self.latent_activation(X)
-        mu = self.mu_conv (latent_activation) # mean
-        log_var = self.log_var_conv (latent_activation) # log (var)
-        ze = self.reparametrize (mu, log_var) 
-        return ze , mu, log_var
+        ze = self.model(X)
+        return ze
 
