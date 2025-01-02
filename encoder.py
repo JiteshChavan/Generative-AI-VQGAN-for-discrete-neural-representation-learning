@@ -60,7 +60,7 @@ class Encoder (nn.Module):
         super().__init__()
         self.config = config
 
-        # first explode RGB into 128 using conv2d
+        # explode RGB into 128 using conv2d
 
         self.initial_conv = nn.Conv2d (config.in_channels, config.latent_in_channels, kernel_size=config.conv_kernel_size, stride=config.conv_stride, padding=config.conv_padding)
         layers = [self.initial_conv]
