@@ -52,9 +52,14 @@ class ResidualBlock (nn.Module):
             return X + self.block(X)
 
 class UpSampleBlock (nn.Module):
-    def __init__(self, channels, factor=2.0):
+    def __init__(self, channels, config, factor=2):
         super().__init__()
-        self.conv = nn.Conv2d (channels, channels, kernel_size=3, stride=1, padding=1)
+        
+        kernel_size = config.up_sample_kernel_size
+        stride = config.up_sample_stride
+        padding = config.up_sample_padding
+
+        self.conv = nn.Conv2d (channels, channels, kernel_size=kernel_size, stride=stride, padding=padding)
         self.factor = factor
     def forward (self, X):
         X = F.interpolate (X, scale_factor=self.factor)

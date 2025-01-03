@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from modules import GroupNorm, Swish, ResidualBlock, DownSampleBlock, SelfAttention
@@ -21,7 +20,6 @@ class EncoderConfig:
     out_channels : int = 512
     
     # res block configs
-    n_res_blocks : int = 2
     res_kernel_size : int = 3
     res_stride : int = 1
     res_padding : int = 1
