@@ -3,12 +3,16 @@ import numpy as np
 from PIL import Image
 from torchvision import transforms
 import glob
+import random
 
 import torch
 
 
 
 from dataclasses import dataclass
+
+# TODO: Permute while forming shards so that val shard has balanced representation
+
 
 @dataclass
 class Data_Utils_Config:
@@ -30,6 +34,11 @@ class Data_Utils_Config:
 class DataUtils:
     def __init__(self, util_config):
         self.util_config = util_config
+        # to maintain state of how many images were reconstructed
+        self.current_recon_image = 0
+    
+    def reset (self):
+        self.current_recon_image = 0
 
     # ------------------------------------------------------------------------------------------------------------------
     # Process iamges in src_path and save them as npy shards in out_path, each shard containing batch_size images
@@ -61,12 +70,17 @@ class DataUtils:
         
         # Get all image files in the folder (supports .jpg, .png)
         image_paths = glob.glob(os.path.join(src_pre_procced, "*.jpg")) + glob.glob(os.path.join(src_pre_procced, "*.png"))
-        
+        random.shuffle(image_paths)
         images = []  # List to store images for each batch
         shard_index = 0  # Index for naming the .npy files
+        
 
         # Iterate through all images
         for image_path in image_paths:
+            if shard_index == 0:
+                shard_tag = "val"
+            else:
+                shard_tag = "train"
             # Open image and convert to RGB
             image = Image.open(image_path)
             if image.mode != "RGB":
@@ -81,7 +95,7 @@ class DataUtils:
             # If we reach batch size, save the batch and reset the list
             if len(images) == shard_batch_size:
                 batch_array = np.stack(images)  # Stack images into a single numpy array (B, H, W, C)
-                np.save(os.path.join(dest_shards, f"shard_{shard_index:03d}.npy"), batch_array)
+                np.save(os.path.join(dest_shards, f"shard_{shard_tag}_{shard_index:04d}.npy"), batch_array)
                 print(f"Saved shard {shard_index:03d} with {shard_batch_size} images.")
                 
                 # Reset for next batch
@@ -89,9 +103,9 @@ class DataUtils:
                 shard_index += 1
         
         # Save any remaining images (if batch size is not a perfect multiple)
-        if images:
+        if images: # images list is not empty, implies len(images) < shard_batch_size
             batch_array = np.stack(images)
-            np.save(os.path.join(dest_shards, f"images_batch_{shard_index:03d}.npy"), batch_array)
+            np.save(os.path.join(dest_shards, f"shard_{shard_tag}_{shard_index:04d}.npy"), batch_array)
             print(f"Saved shard {shard_index:03d} with remaining images.")
         
         print(f"All images processed and saved in {dest_shards}.")
@@ -100,7 +114,7 @@ class DataUtils:
     # ------------------------------------------------------------------------------------------------------------------------------
     # Reconstruct image from a tensor (B, C, H, W) normalized to [-1,1] and store it to out_path, with specified recon_type tag
     # ------------------------------------------------------------------------------------------------------------------------------
-    def tensor_to_image (self, tensor, out_path, recon_type):
+    def tensor_to_image (self, tensor, dest_path, recon_type):
         """
         Reconstruct and save images from a PyTorch tensor.
 
@@ -117,17 +131,20 @@ class DataUtils:
         else:
             recon_tag = "neural_recon"
 
-        os.makedirs(out_path, exist_ok=True)
+        os.makedirs(dest_path, exist_ok=True)
 
         # Denormalize the tensor to [0, 255]
         tensor = ((tensor + 1) * 127.5).clamp(0, 255).to(torch.uint8) # convert to uint8
 
         # permute tensor back to (B H W C) from B C H W
         tensor = tensor.permute (0, 2, 3, 1).cpu().numpy()
+        image_index = self.current_recon_image
         for i, image in enumerate (tensor):
             image = Image.fromarray (image) # convert to PIL Image
-            image.save (f"{out_path}/{recon_tag}_{i:04d}.png")
-            print (f"saved {out_path}/{recon_tag}_{i:04d}.png")
+            image.save (f"{dest_path}/{recon_tag}_{image_index:04d}.png")
+            print (f"saved {dest_path}/{recon_tag}_{image_index:04d}.png")
+            image_index += 1
+        self.current_recon_image = image_index
 
 
     # ------------------------------------------------------------------------------------------------------------------------------
