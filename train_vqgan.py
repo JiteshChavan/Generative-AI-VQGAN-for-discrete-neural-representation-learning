@@ -86,7 +86,12 @@ class DataloaderLite:
             # if remainder is not divisible by in the last shard [a:b] loads from a to c (c < b)
         return x
 
-# -------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------
+#   Optimization configurations (LR schedules, Weight decay regularization, etc)
+# --------------------------------------------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------
 # simple launch:
 # python train_vqgan.py
 # DDP launch for e.g. 8 GPUs:
@@ -126,4 +131,7 @@ else:
     elif hasattr (torch.backends, 'mps') and torch.backends.mps.is_available ():
         device = 'mps'
     print (f"using device: {device}")
-    
+
+torch.manual_seed (1337)
+if torch.cuda.is_available ():
+    torch.cuda.manual_seed(1337)

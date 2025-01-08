@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from dataclasses import dataclass
+from modules import GroupNorm
 
 @dataclass
 class DiscriminatorConfig:
@@ -40,6 +41,8 @@ class Discriminator (nn.Module):
             else:
                 stride = config.disc_stride
             layers.append (nn.Conv2d(in_channels, out_channels, kernel_size=config.disc_kernel_size, stride=stride, padding=config.disc_padding))
+            layers.append (GroupNorm (out_channels))
+            layers.append (nn.LeakyReLU(0.1, inplace=True))
             print (f"in:{in_channels}, out:{out_channels}, stride:{stride}")
             in_channels = out_channels
             out_channels = 2 * in_channels
