@@ -32,17 +32,33 @@ class ResidualBlock (nn.Module):
         channel_up_stride = config.channel_up_stride
         channel_up_padding = config.channel_up_padding
         
-        self.block = nn.Sequential (
+       # self.block = nn.Sequential (
+       #     GroupNorm (in_channels),
+       #     Swish (),
+       #     nn.Conv2d (in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
+       #     GroupNorm (out_channels),
+       #     Swish ()
+       # )
+       # self.conv_projection = nn.Conv2d (out_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding) # Project back into residual pathway
+       # self.conv_projection.VQGAN_SKIP_CONNECTION_SCALE_INIT = 1
+
+        layers = [
             GroupNorm (in_channels),
             Swish (),
             nn.Conv2d (in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
             GroupNorm (out_channels),
-            Swish (),
-            nn.Conv2d (out_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding) # Project back into residual pathway
-        )
+            Swish ()
+        ]
+        self.conv_projection = nn.Conv2d (out_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding) # Project back into residual pathway
+        # conv_proj is the final projection layer only IF in_channels = out_channels
+        if in_channels == out_channels:
+            self.conv_projection.SKIP_CONNECTION_SCALE_INIT = 1
+        layers.append (self.conv_projection)
+        self.block = nn.Sequential (*layers)
 
         if in_channels != out_channels:
             self.channel_up = nn.Conv2d (in_channels, out_channels, kernel_size=channel_up_kernel_size, stride=channel_up_stride, padding=channel_up_padding)
+            self.channel_up.SKIP_CONNECTION_SCALE_INIT = 1
     
     def forward (self, X):
 
@@ -101,6 +117,8 @@ class SelfAttention (nn.Module):
         # attention
         self.conv_attention = nn.Conv2d (channels, 3 * channels, kernel_size=att_kernel_size, stride=att_stride, padding=att_padding)
         self.conv_projection = nn.Conv2d (channels, channels, kernel_size=proj_kernel_size, stride=proj_stride, padding=proj_padding)
+        # scale init shenanigans
+        self.conv_projection.SKIP_CONNECTION_SCALE_INIT = 1
     
     def forward (self, X):
         B, C, H, W = X.size()

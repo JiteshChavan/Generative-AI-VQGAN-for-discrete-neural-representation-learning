@@ -28,6 +28,37 @@ class VQGan (nn.Module):
         self.post_quant_conv = nn.Conv2d (encoder_config.latent_dim, encoder_config.latent_dim, kernel_size=encoder_config.proj_kernel_size, stride=encoder_config.proj_stride, padding=encoder_config.proj_padding)
 
         self.decoder =  Decoder (decoder_config)
+
+        # 1.0 because swish
+        self.kaiming_init_gain = 1.0 # to compensate for non linearities during initialization of weights, refer kaiming init
+
+        # formality
+        self.encoder_config = encoder_config
+        self.quantizer_config = quantizer_config
+        self.decoder_config = decoder_config
+
+        # init sorcery
+        self.apply(self._init_weights)
+    
+    # deprecated comments, we are not hard coding or approximating it here
+    # hard coding bad practice, wont scale with increasing fan_in like Xavier or Kaming init
+    # but we will keep this because that is the GPT2 initialization per their source code
+    # 0.02 is reasonably similar to 1/root(768 or 1024 or 1600 or 1280) for the gpt2 models
+    def _init_weights (self, module):
+        if isinstance (module, nn.Conv2d):            
+            # u = 0, calculate sigma such that weights should be initialized from that N(u, sigma) according to Kaiming init
+            fan_in = nn.init._calculate_correct_fan (module.weight, mode='fan_in')
+            std = (self.kaiming_init_gain / fan_in) ** 0.5
+            
+            if hasattr (module, 'SKIP_CONNECTION_SCALE_INIT'):
+                n_skip_additions = self.encoder_config.n_compressions + self.encoder_config.n_post_compression_skip_connections \
+                                    + self.decoder_config.n_expansions + self.decoder_config.n_pre_expansion_skip_connections
+                std *= n_skip_additions ** -0.5
+            
+        elif isinstance (module, nn.Embedding):
+            std = (self.quantizer_config.n_embd) ** -0.5
+        
+        nn.init.normal_ (module.weight, mean=0.0, std=std) # optional generator can be passed for debugging
     
     def forward (self, X):
         # X (B, C, H, W)
@@ -103,7 +134,3 @@ class VQGan (nn.Module):
         # kernel fusion for AdamW update instead of iterating over all the tensors to step which is a lot slower.
         optimizer = torch.optim.AdamW (optim_groups, learning_rate, betas=(0.9,0.95), eps=1e-8, use_fused=use_fused)
         return optimizer
-
-
-
-

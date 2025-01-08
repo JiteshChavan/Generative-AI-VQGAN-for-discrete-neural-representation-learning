@@ -12,6 +12,7 @@ class DecoderConfig:
     latent_res : int = 16
     image_res : int = 256
     n_expansions : int = 4 # (spatial resolution is expanded by 2^4)
+    n_pre_expansion_skip_connections : int = 3
     image_channels : int = 3
     penultimate_channels : int = 64
 
@@ -54,6 +55,7 @@ class Decoder(nn.Module):
         super().__init__()
         self.config = config
 
+        #  TODO: UPDATE this thing "n_pre_expansion_skip_connections" in config if you want to add more skip connections pre expansion, res has 1 skip conn, selfatt has 1 as well
         layers = []
         initial_conv = nn.Conv2d (self.config.latent_dim, self.config.latent_dim, kernel_size=self.config.conv_kernel_size, stride=self.config.conv_stride, padding=self.config.conv_padding)
         layers.append(initial_conv)

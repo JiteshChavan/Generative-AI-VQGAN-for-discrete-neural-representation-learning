@@ -3,6 +3,9 @@ import torch.nn.functional as F
 from modules import GroupNorm, Swish, ResidualBlock, DownSampleBlock, SelfAttention
 from dataclasses import dataclass
 
+from utility_modules.seed_manager import Seeds
+
+
 
 #  = nn.ModuleList ([Block (config) for _ in range (config.n_layer)])
 @dataclass
@@ -11,6 +14,8 @@ class EncoderConfig:
     in_resolution : int = 256
     in_channels : int = 3
     n_compressions : int = 4 # (spatial resolution is compressed by 2^4)
+    n_post_compression_skip_connections : int = 3
+
 
     # latent config
     latent_in_channels : int = 128
@@ -66,6 +71,7 @@ class Encoder (nn.Module):
         # init setup for channels
         in_channels = config.latent_in_channels
         out_channels = 2*in_channels
+
         for i in range (config.n_compressions):
             layers.append (ResidualBlock (in_channels, out_channels, config))
             layers.append (DownSampleBlock (out_channels, config))
@@ -79,6 +85,7 @@ class Encoder (nn.Module):
                 out_channels = 2 * in_channels
 
 
+        #  TODO: UPDATE this thing "n_post_compression_skip_connections" in config if you want to add more skip connections post compression, res has 1 skip conn, selfatt has 1 as well
         layers.append (ResidualBlock (in_channels, in_channels, config))
         layers.append (SelfAttention (in_channels, config))
         layers.append (ResidualBlock (in_channels, in_channels, config))
