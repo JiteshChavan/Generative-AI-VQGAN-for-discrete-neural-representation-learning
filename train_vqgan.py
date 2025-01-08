@@ -1,6 +1,4 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
 import math
 import time
 import inspect
@@ -39,7 +37,7 @@ def load_tokens (filename):
 
 # we will make a different data utils class for reconstructions to make sure the indices of clone recons and neural recons aren't warped
 class DataloaderLite:
-    # to load B images with T= HW tokens each has 3 Channels (RGB)
+    # to load B images for each ddp process with T= HW tokens each has 3 Channels (RGB)
     def __init__(self, B, T, num_processes, process_rank, split, data_root):
         self.B = B
         self.T = T
@@ -80,8 +78,52 @@ class DataloaderLite:
             self.current_shard = (self.current_shard + 1) % len(self.shards)
             self.tokens = load_tokens (self.shards[self.current_shard])
             self.current_position = self.process_rank * B
-        
+            # total len (tokens) = 9B
+            # 0 1 2 3 4 5 6  7
+            # 8 9 10 11 12
+            # k k x
+            # third gpu loads 2B-3B from next shard first two load remainder of the current shard
+            # if remainder is not divisible by in the last shard [a:b] loads from a to c (c < b)
         return x
 
 # -------------------------------------------------------
-# optimizer configs
+# simple launch:
+# python train_vqgan.py
+# DDP launch for e.g. 8 GPUs:
+# torchrun --standalone --nproc_per_node=8 train_vqgan.py
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
+
+# setup Distributed Data Parallel (DDP)
+# torchrun command sets the env variables RANK, LOCAL_RANK, WORLD_SIZE
+
+ddp = int (os.environ.get ('RANK', -1)) != -1 # is this a ddp run or not?
+if ddp:
+    assert torch.cuda.is_available(), f"CUDA is required for DDP"
+    init_process_group (backend='nccl')
+    ddp_rank = int (os.environ['RANK'])
+    ddp_local_rank = int (os.environ['LOCAL_RANK'])
+    ddp_world_size = int (os.environ['WORLD_SIZE'])
+    device = f"cuda:{ddp_local_rank}"
+    torch.cuda.set_device (device)
+    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc
+else:
+    # non ddp vanilla run
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+
+    device = 'cpu'
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif hasattr (torch.backends, 'mps') and torch.backends.mps.is_available ():
+        device = 'mps'
+    print (f"using device: {device}")
+    
