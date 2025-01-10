@@ -9,13 +9,9 @@ from dataclasses import dataclass
 
 import inspect
 
-@dataclass
-class VQGanConfig:
-    pass
-
 
 class VQGan (nn.Module):
-    def __init__(self, encoder_config, quantizer_config, decoder_config, config):
+    def __init__(self, encoder_config, quantizer_config, decoder_config):
         super().__init__()
         self.encoder = Encoder (encoder_config)
         
@@ -110,7 +106,7 @@ class VQGan (nn.Module):
         # start with all parameters that require gradients
         param_dict = {pn:p for pn,p in self.named_parameters()}
         param_dict = {pn:p for pn,p in param_dict.items() if p.requires_grad}
-
+        
         # create optim groups. Any parameter that is 2D will be weight decayed, otherwise no.
         # i.e. all tensors in matmul + embeddings decay, all biases and layer norms don't
         decay_params = [p for pn, p in param_dict.items() if p.dim() >= 2]

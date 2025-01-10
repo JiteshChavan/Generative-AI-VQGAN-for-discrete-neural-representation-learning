@@ -22,7 +22,6 @@ class EncoderConfig:
     latent_dim : int = 1024 # TODO: check, and change later if needed
 
     latent_resolution : int = 16 # on which we run attention
-    out_channels : int = 512
     
     # res block configs
     res_kernel_size : int = 3
