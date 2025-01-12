@@ -108,6 +108,62 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
+
+def compute_loss (vqgan_model, discriminator, perceptual_distinguisher, x, perceptual_loss_factor, rec_loss_factor, step):
+    reconstructed_iamges, encoding_indices, vq_loss = vqgan_model (x)
+                    
+    # Discriminator Forward
+    disc_real = discriminator (x)
+    disc_generated = discriminator (reconstructed_iamges)
+                    
+    # VGG forward
+    perceptual_loss = perceptual_distinguisher (x, reconstructed_iamges) # (B, 1, 1, 1)
+    perceptual_loss = perceptual_loss.squeeze ( ) #(B)
+    # formality none of the optimizers have access to vgg params but this way its explicit and efficient
+    perceptual_loss = perceptual_loss.detach ( )
+
+    reconstruction_loss = F.mse_loss (x, reconstructed_iamges, reduction='none') #(B, C, H, W)
+    reconstruction_loss = reconstruction_loss.mean (dim=(1,2,3)) #(B)
+
+    perceptual_recon_loss = rec_loss_factor * reconstruction_loss + perceptual_loss_factor * perceptual_loss
+    perceptual_recon_loss = perceptual_recon_loss.mean()
+                    
+
+    # compute adversarial loss for generator if it's not zeroth epoch (VQGAN paper specs)
+    zeroth_epoch = True if step < steps_per_epoch else False
+    if zeroth_epoch == True:
+        # don't calculate
+        # Wasserstein loss, approximation of BCE (discriminator(generated), ones_like(generated))
+        # TODO: Internalize throughly
+        # good approximation of KLD between discriminator's predictions given generated inputs and ideal distribution of generated images being classified as real.
+        # basically mean negative log likelihood is approximation of F.cross_entropy (discriminator(generated), ones_like(generated)) which is approximation of 
+        # KLD between (discriminator(generated), ones_like(generated)) which is proportional to
+        # BCE (discriminator(genrated), ones_like(generated))
+        g_loss = 0 # replace by formula
+    else:
+        #calculate adversarial loss for generator
+        g_loss = - torch.mean (disc_generated)
+        lambda_factor = vqgan_model.compute_lambda (perceptual_recon_loss, g_loss)
+        g_loss = lambda_factor * g_loss
+        
+    # VQ GAN LOSS
+    # Net Generator Loss
+    vq_gan_loss = perceptual_recon_loss + vq_loss + g_loss
+                    
+    # Discriminator Loss : Hinge Loss. Push Logits for the catgeorical distribution that come out of discriminator 
+    # to be more than +1 for real images
+    # At the same time Push logits for categorical distribution that comes out of discriminator to be less than -1 for fake images
+
+    # drive logits corresponding to real images from discriminator above zero
+    # don't need to explicitly squeeze out the spurious depth dimension (1 channels) from discriminator output, mean will still be evaluated correctly
+    d_loss_real= torch.mean(F.relu (1.0 - disc_real))
+    # drive logits corresponding to fake(generate) images from discriminator below -1
+    d_loss_fake = torch.mean(F.relu (1.0 + disc_generated))
+
+    d_loss = d_loss_factor * 0.5 * (d_loss_real + d_loss_fake)
+    return vq_gan_loss, d_loss
+
+
 # setup Distributed Data Parallel (DDP)
 # torchrun command sets the env variables RANK, LOCAL_RANK, WORLD_SIZE
 
@@ -217,6 +273,7 @@ raw_model = model.module if ddp else model
 
 num_epochs = 100
 steps_per_epoch = n_train_images / B if n_train_images % B == 0 else (n_train_images // B) + 1
+steps_per_checkpoint = 300
 # TODO: tweak LR later based on performance
 max_lr = 6e-4
 min_lr = 0.1 * max_lr
@@ -235,11 +292,15 @@ def get_lr (it):
 # TODO: merge all hyper parameters in a dataclass
 rec_loss_factor = 1.0
 perceptual_loss_factor = 1.0
+d_loss_factor = 1.0
 
 # Optimize!!!
 # First try to crush and overfit a batch
 # TODO : change weight decay regularization strength later
+
+# vqgan_optimizer has access to vqgan parameters only
 vqgan_optimizer = raw_model.configure_optimizers (weight_decay=0.1, learning_rate=6e-4, device=device)
+# discriminator_optimizer has access to discriminator parameters only
 disc_optimizer = discriminator.configure_optimizers (weight_decay=0.1, learning_rate=6e-4, device=device)
 
 # create the log directory we will write checkpoints to and log to
@@ -269,11 +330,13 @@ else:
     start_step = checkpoint['step']
 
     vqgan_optimizer.load_state_dict(checkpoint['vqgan_optim'])
+    # TODO: FIX EVERYTHING LIKE THIS
+    disc_optimizer.load_state_dict(checkpoint[f"disc_optim_{ddp_rank}"])
     raw_model.load_state_dict(checkpoint['model'])
     
     train_loader.current_shard = checkpoint['shard_state']
     train_loader.tokens = load_tokens(train_loader.shards[train_loader.current_shard])
-    train_loader.current_position = checkpoint['current_pos_GPU0'] + train_loader.B * ddp_rank
+    train_loader.current_position = checkpoint['train_pos_GPU0'] + train_loader.B * ddp_rank
 
     val_loader.current_shard = checkpoint['val_shard_state']
     val_loader.tokens = load_tokens (val_loader.shards(val_loader.current_shard))
@@ -304,39 +367,103 @@ for step in range (start_step, max_steps):
         model.eval()
         val_loader.reset()
         with torch.no_grad():
-            val_loss_accum = 0
+            vqgan_val_loss_accum = 0
+            d_val_loss_accum = 0
             val_loss_steps = 20
             for _ in range (val_loss_steps):
                 x = val_loader.next_batch()
                 x = x.to(device) # (B, C, H, W)
                 with torch.autocast (device_type=device, dtype=torch.bfloat16):
-                    # forward all the models involved and calculate the losses
-                    # VQ forward
-                    reconstructed_iamges, encoding_indices, vq_loss = model (x)
-                    
-                    # Discriminator Forward
-                    disc_real = discriminator (x)
-                    disc_generated = discriminator (reconstructed_iamges)
-                    
-                    # VGG forward
-                    perceptual_loss = perceptual_distinguisher (x, reconstructed_iamges) # (B, 1, 1, 1)
-                    perceptual_loss = perceptual_loss.squeeze() #(B)
+                    # compute loss function has context of global variables like steps_per_epoch, num_epochs etc
+                    vqgan_loss, d_loss = compute_loss (vqgan_model=model, discriminator=discriminator, perceptual_distinguisher=perceptual_distinguisher, x=x, perceptual_loss_factor=perceptual_loss_factor,
+                                                        rec_loss_factor=rec_loss_factor, step=step)
 
-                    reconstruction_loss = F.mse_loss (x, reconstructed_iamges, reduction='none') #(B, C, H, W)
-                    reconstruction_loss = reconstruction_loss.mean (dim=(1,2,3)) #(B)
+                # we are not interested in batchwise summation but in batchwise average of losses
+                # and 20 val_loss 'mini" steps signify a batch
+                vqgan_loss = vqgan_loss / val_loss_steps
+                d_loss = d_loss / val_loss_steps
+                # each of the processes have averaged val loss corresponding to 20 forwards 
+                vqgan_val_loss_accum += vqgan_loss.detach()
+                d_val_loss_accum += d_loss.detach()
+                # these val losses across processes need to be averaged across all processes
+        
+        if ddp:
+            dist.all_reduce(vqgan_val_loss_accum, op=dist.ReduceOp.AVG)
+            dist.all_reduce(d_val_loss_accum, op=dist.ReduceOp.AVG)
+        if master_process:
+            # log
+            print (f"VQGAN Validation loss: {vqgan_val_loss_accum.item():.4f}")
+            print (f"Discriminator Validation loss: {d_val_loss_accum.item():.4f}")
 
-                    perceptual_recon_loss = rec_loss_factor * reconstruction_loss + perceptual_loss_factor * perceptual_loss
-                    perceptual_recon_loss = perceptual_recon_loss.mean()
+            with open(log_file, "a") as f:
+                f.write (f"{step} vqgan_val {vqgan_val_loss_accum.item():.4f} d_val {d_val_loss_accum.item():.4f}\n")
 
-                    zeroth_epoch = True if step < steps_per_epoch else False
-                    if zeroth_epoch == True:
-                        # don't calculate
-                        gan_loss = 0
-                    else:
-                        #calculate gan loss
-                        gan_loss = 1 # replace by formula
+            # log checkpoints for masterprocess
+            if step > 0 and (step % steps_per_checkpoint == 0 or last_step):
+                checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
+                if os.path.exists (checkpoint_path):
+                    # other gpu went ahead and stored their optim state dicts, load the dict, set the keys
+                    checkpoint = torch.load(checkpoint_path)
+                    checkpoint['step'] = step
+                    checkpoint['model'] = raw_model.state_dict()
+                    checkpoint[f"vqgan_optim_{ddp_rank}"] = vqgan_optimizer.state_dict()
+                    checkpoint[f"disc_optim_{ddp_rank}"] = disc_optimizer.state_dict()
+                    checkpoint['shard_state'] = train_loader.current_shard
+                    checkpoint['val_shard_state'] = val_loader.current_shard
+                    checkpoint['train_pos_GPU0'] = train_loader.current_position
+                    checkpoint['val_pos_GPU0'] = val_loader.current_position
+                else:
+                    # if not create the checkpoint dict and save
+                    checkpoint = {
+                        'step' : step,
+                        'model' : raw_model.state_dict(),
+                        f"vqgan_optim_{ddp_rank}" : vqgan_optimizer.state_dict(),
+                        f"disc_optim_{ddp_rank}" : disc_optimizer.state_dict(),
+                        'shard_state' : train_loader.current_shard,
+                        'val_shard_state' : val_loader.current_shard,
+                        'train_pos_GPU0' : train_loader.current_position,
+                        'val_pos_GPU0' : val_loader.current_position,
+                    }
+                print (f">__SAVING__TRAIN_SHARD_NUMBER={train_loader.current_shard}")
+                print (f">__SAVING__CURRENT TRAIN POISTION FOR GPU 0={train_loader.current_position}")
+                torch.save (checkpoint, checkpoint_path)
+        
+        # log optimizers for non master process as well
+        elif not (master_process):
+            checkpoint_path = os.path.join (log_dir, f"model_{step:05d}.pt")
+            # if process 0 went ahead and saved its contents, load the dict, update with the processes' own optim state dicts and save back
+            if os.path.exists (checkpoint_path):
+                checkpoint = torch.load (checkpoint_path)
+                checkpoint[f"vqgan_optim_{ddp_rank}"] = vqgan_optimizer.state_dict()
+                checkpoint[f"disc_optim_{ddp_rank}"] = disc_optimizer.state_dict()
+            else:
+            # else create a new checkpoint dict that stores optim states of the particular GPUs and save it 
+                checkpoint = {
+                    f"vqgan_optim_{ddp_rank}" : vqgan_optimizer.state_dict(),
+                    f"disc_optim_{ddp_rank}" : disc_optimizer.state_dict()
+                }
+            torch.save (checkpoint, checkpoint_path)
 
-                
-                    
+
+        
+
+
+
+
+
+
+# make gradients for generator params 0
+vqgan_optimizer.zero_grad()
+# backward from g_loss and other generator losses through discriminator, decoder, vgg etc
+vqgan_loss.backward(retain_graph=True)
+# vq_gan_loss.bacward() mustve deposited gradients in discriminator parameters, make them zero as they are not needed to train discriminator
+disc_optimizer.zero_grad()
+# backward form discriminator adversarial loss that incentivizes discriminaotr to better distinguish between real and reconstructed images
+d_loss.backward()
+# step according to gradients for generator and discriminator parameters
+vqgan_optimizer.step()
+disc_optimizer.step()
+
+
 
 

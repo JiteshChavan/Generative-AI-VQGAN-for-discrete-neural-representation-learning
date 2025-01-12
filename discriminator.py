@@ -62,11 +62,11 @@ class Discriminator (nn.Module):
         return self.model(X)
     
     def _init_weights (self, module):
-       if isinstance (module, nn.Conv2d):            
-           # u = 0, calculate sigma such that weights should be initialized from that N(u, sigma) according to Kaiming init
-           fan_in = nn.init._calculate_correct_fan (module.weight, mode='fan_in')
-           std = (self.kaiming_init_gain / fan_in) ** 0.5       
-       nn.init.normal_ (module.weight, mean=0.0, std=std) # optional generator can be passed for debugging
+        if isinstance (module, nn.Conv2d):            
+            # u = 0, calculate sigma such that weights should be initialized from that N(u, sigma) according to Kaiming init
+            fan_in = nn.init._calculate_correct_fan (module.weight, mode='fan_in')
+            std = (self.config.kaiming_init_gain / fan_in) ** 0.5       
+            nn.init.normal_ (module.weight, mean=0.0, std=std) # optional generator can be passed for debugging
 
 
     # ---------------------------------------------------------------------------------------------------------------------------------

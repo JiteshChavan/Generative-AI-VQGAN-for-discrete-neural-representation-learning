@@ -50,11 +50,10 @@ class VQGan (nn.Module):
                 n_skip_additions = self.encoder_config.n_compressions + self.encoder_config.n_post_compression_skip_connections \
                                     + self.decoder_config.n_expansions + self.decoder_config.n_pre_expansion_skip_connections
                 std *= n_skip_additions ** -0.5
-            
+            nn.init.normal_ (module.weight, mean=0.0, std=std)
         elif isinstance (module, nn.Embedding):
             std = (self.quantizer_config.n_embd) ** -0.5
-        
-        nn.init.normal_ (module.weight, mean=0.0, std=std) # optional generator can be passed for debugging
+            nn.init.normal_ (module.weight, mean=0.0, std=std) # optional generator can be passed for debugging
     
     def forward (self, X):
         # X (B, C, H, W)
