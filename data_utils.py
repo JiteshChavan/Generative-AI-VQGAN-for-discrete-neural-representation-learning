@@ -18,16 +18,8 @@ from dataclasses import dataclass
 class Data_Utils_Config:
     downscale_res : int = 256
 
-    # path to downscaled and cropped images
-    src_processed : str = "./test"
-    # dest path for shards
-    dest_shards : str = "./testShards"
-
-    # images to be packed in a single shard
-    shard_batch_size : int = 640
-
     # reconstruction types
-    recon_types = {"clone", "neural_recon"}
+    recon_types = {"clone", "neural"}
 
 
 
@@ -35,10 +27,12 @@ class DataUtils:
     def __init__(self, util_config):
         self.util_config = util_config
         # to maintain state of how many images were reconstructed
-        self.current_recon_image = 0
-    
+        self.current_clone_recon_image = 0
+        self.current_neural_recon_image = 0
+
     def reset (self):
-        self.current_recon_image = 0
+        self.current_clone_recon_image = 0
+        self.current_neural_recon_image = 0
 
     # ------------------------------------------------------------------------------------------------------------------
     # Process iamges in src_path and save them as npy shards in out_path, each shard containing batch_size images
@@ -112,9 +106,9 @@ class DataUtils:
 
 
     # ------------------------------------------------------------------------------------------------------------------------------
-    # Reconstruct image from a tensor (B, C, H, W) normalized to [-1,1] and store it to out_path, with specified recon_type tag
+    # Reconstruct image from a tensor (B, C, H, W) normalized to [-1,1] and store it to dest_path, with specified recon_type tag
     # ------------------------------------------------------------------------------------------------------------------------------
-    def tensor_to_image (self, tensor, dest_path, recon_type):
+    def tensor_to_image (self, tensor, dest_path, recon_tag):
         """
         Reconstruct and save images from a PyTorch tensor.
 
@@ -124,12 +118,12 @@ class DataUtils:
         """
         # ensure the tensor values are in range [-1, 1]
         assert torch.min(tensor) >= -1 and torch.max(tensor) <= 1, f"Tensor values must be in [-1,1] range"
-        assert recon_type in self.util_config.recon_types
+        assert recon_tag in self.util_config.recon_types
 
-        if recon_type == "clone":
-            recon_tag = "clone"
+        if recon_tag == "clone":
+            image_index = self.current_clone_recon_image
         else:
-            recon_tag = "neural_recon"
+            image_index = self.current_neural_recon_image
 
         os.makedirs(dest_path, exist_ok=True)
 
@@ -138,13 +132,17 @@ class DataUtils:
 
         # permute tensor back to (B H W C) from B C H W
         tensor = tensor.permute (0, 2, 3, 1).cpu().numpy()
-        image_index = self.current_recon_image
         for i, image in enumerate (tensor):
             image = Image.fromarray (image) # convert to PIL Image
             image.save (f"{dest_path}/{recon_tag}_{image_index:04d}.png")
             print (f"saved {dest_path}/{recon_tag}_{image_index:04d}.png")
             image_index += 1
-        self.current_recon_image = image_index
+
+        if recon_tag == 'clone':
+            self.current_clone_recon_image = image_index
+        else:
+            self.current_neural_recon_image = image_index
+
 
 
     # ------------------------------------------------------------------------------------------------------------------------------

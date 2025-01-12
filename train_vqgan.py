@@ -267,13 +267,26 @@ raw_model = model.module if ddp else model
 # but it's just 5 lines of code, I know what's exactly going on
 # and I don't like to use abstractions where they are kind of unscrutable and idk what they are doing
 
+from data_utils import DataUtils, Data_Utils_Config
+recon_util = DataUtils (Data_Utils_Config)
 
 # TODO: cross check against VQ GAN paper or github repository
 
-
+# TODO: change these numbers later
 num_epochs = 100
 steps_per_epoch = n_train_images / B if n_train_images % B == 0 else (n_train_images // B) + 1
 steps_per_checkpoint = 300
+steps_per_eval = 50
+steps_per_inference = 250
+
+inference_shard_path = "./dummy_tests/test_shards/shard_train_0001.npy"
+inference_results_path = "./dummy_tests/results"
+
+os.makedirs(inference_results_path, exist_ok=True)
+assert os.path.exists(inference_shard_path), "\nNo inference shard found!\n"
+assert os.path.exists (inference_results_path), "\nInvalid path specified for storing result images!\n"
+
+assert steps_per_checkpoint % steps_per_eval == 0, f"we only checkpoint after running eval. stepsPerCheckPoint: {steps_per_checkpoint} must be divisible by stepsPerEval : {steps_per_eval}"
 # TODO: tweak LR later based on performance
 max_lr = 6e-4
 min_lr = 0.1 * max_lr
@@ -363,7 +376,7 @@ for step in range (start_step, max_steps):
     t0 = time.time()
     last_step = (step == max_steps - 1)
     # once in a while evaluate our validation loss 
-    if (step % 50 == 0 or last_step):
+    if (step % steps_per_eval == 0 or last_step):
         model.eval()
         val_loader.reset()
         with torch.no_grad():
@@ -443,6 +456,20 @@ for step in range (start_step, max_steps):
                     f"disc_optim_{ddp_rank}" : disc_optimizer.state_dict()
                 }
             torch.save (checkpoint, checkpoint_path)
+
+    # once in a while represent an image in latent space and reconstruct from it
+    if (step > 0 and (step % steps_per_inference == 0 or last_step)):
+        model.eval()
+        num_reconstructions = 8
+        inference_tokens = load_tokens (inference_shard_path)
+        inference_tokens = inference_tokens[:num_reconstructions]
+        
+        current_step_results_path = f"{inference_results_path}/{step}"
+        os.makedirs(current_step_results_path, exist_ok=True)
+        recon_util.tensor_to_image (inference_tokens, current_step_results_path, "clone")
+
+
+        
 
 
         
