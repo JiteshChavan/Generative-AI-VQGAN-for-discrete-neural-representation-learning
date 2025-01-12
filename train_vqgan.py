@@ -468,6 +468,8 @@ for step in range (start_step, max_steps):
         os.makedirs(current_step_results_path, exist_ok=True)
         recon_util.tensor_to_image (inference_tokens, current_step_results_path, "clone")
 
+        reconstructed_images, encoding_indices, vq_loss = model (infere)
+
 
         
 
