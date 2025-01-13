@@ -28,11 +28,12 @@ master_process = True
 
 
 # ------------------------------------------------------------------------------------------------------------------------------
-# Load images with pixel values normalized to [-1,1] from a specified shard as a torch tensor
+# Load images with pixel values normalized to [-1,1] from a specified shard as a to     rch tensor
 # ------------------------------------------------------------------------------------------------------------------------------
 def load_tokens (filename):
     npt = np.load (filename) # shape (B, H, W, C) because PIL was used to store
     ptt = torch.from_numpy (npt).permute (0, 3, 1, 2)
+    ptt = ptt.to(torch.float) # to match conv layers data type
     return ptt
 
 # we will make a different data utils class for reconstructions to make sure the indices of clone recons and neural recons aren't warped
@@ -65,6 +66,7 @@ class DataloaderLite:
         # don't really need T here
         # B images go to one process
         self.current_position = self.process_rank * self.B
+        self.current_epoch = 0
 
     def next_batch (self):
         B = self.B
@@ -76,7 +78,11 @@ class DataloaderLite:
         self.current_position += self.B * self.num_processes
         # if loading the next batch would be out of bounds, reset
         if self.current_position + (B * self.num_processes) > len (self.tokens): # len (B, C, H, W) returns B
+            
+            if self.current_shard + 1 >= len(self.shards):
+                self.current_epoch = self.current_epoch + 1
             self.current_shard = (self.current_shard + 1) % len(self.shards)
+            
             self.tokens = load_tokens (self.shards[self.current_shard])
             self.current_position = self.process_rank * B
             # total len (tokens) = 9B
@@ -109,7 +115,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
 
-def compute_loss (vqgan_model, discriminator, perceptual_distinguisher, x, perceptual_loss_factor, rec_loss_factor, step):
+def compute_loss (vqgan_model, discriminator, perceptual_distinguisher, x, perceptual_loss_factor, rec_loss_factor, current_step):
     reconstructed_iamges, encoding_indices, vq_loss = vqgan_model (x)
                     
     # Discriminator Forward
@@ -130,8 +136,8 @@ def compute_loss (vqgan_model, discriminator, perceptual_distinguisher, x, perce
                     
 
     # compute adversarial loss for generator if it's not zeroth epoch (VQGAN paper specs)
-    zeroth_epoch = True if step < steps_per_epoch else False
-    if zeroth_epoch == True:
+    is_zeroth_epoch = True if current_step < steps_per_epoch else False
+    if is_zeroth_epoch:
         # don't calculate
         # Wasserstein loss, approximation of BCE (discriminator(generated), ones_like(generated))
         # TODO: Internalize throughly
@@ -145,6 +151,8 @@ def compute_loss (vqgan_model, discriminator, perceptual_distinguisher, x, perce
         g_loss = - torch.mean (disc_generated)
         lambda_factor = vqgan_model.compute_lambda (perceptual_recon_loss, g_loss)
         g_loss = lambda_factor * g_loss
+        if master_process:
+            print (f"\nGanLoss{g_loss:.6f} activated!\n")
         
     # VQ GAN LOSS
     # Net Generator Loss
@@ -201,27 +209,33 @@ if torch.cuda.is_available ():
 
 # how many mini steps we should accumulate gradients before updating model weights
 # jank for gradient accumulation practices for bigger datasets, not needed for smaller ones
-n = 1
-n_grad_accum_steps_multiplier = n * ddp_world_size
 
+# How many images to forward across all the GPUs (ddp_worldsize x) before updating weights?
+# Single GPU forwards B images in one forward pass
+# ensemble of GPUs forwards ddp_worldsize * B images in one forward pass
+# desirable to have total batch size (total images forwarded per gradient step) to be integral multiple of ddp_world_size * B
+
+# after n ddp forward passes we do one update i.e. total batch size is 4 * ddp world size * batchSize
+# basically grad accum steps
+grad_accum_steps = 4
 # batch size (images in a batch)
-B = 64
-# pixels (tokens) in image
-T = 256*256
-
+B = 32
 # total batch size as number of tokens processed per backward update
-total_batch_size = B*T * n_grad_accum_steps_multiplier
 
-assert total_batch_size % (ddp_world_size * B*T) == 0, f"make sure total batch size is divisible by (B*T * ddp_world_size)"
-grad_accum_steps = total_batch_size // (ddp_world_size * B * T) # each process will do B*T and theres ddp_world_size processes
+# with current setup our total batch size is 4 * 8 * 32 = 1024 images processed per gradient step
+total_batch_size = grad_accum_steps * ddp_world_size * B
+
+
+assert total_batch_size % (ddp_world_size * B) == 0, f"make sure total batch size is divisible by (B*T * ddp_world_size)"
+grad_accum_steps = total_batch_size // (ddp_world_size * B) # each process will do B*T and theres ddp_world_size processes
 
 if master_process: # then guard this
     print (f"total desired batch size: {total_batch_size}")
     print (f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
 
-train_loader = DataloaderLite (B=B, T=T, num_processes=ddp_world_size, process_rank=ddp_rank, split='train', data_root='./data/train_set')
-val_loader = DataloaderLite (B=B, T=T, num_processes=ddp_world_size, process_rank=ddp_rank, split='val', data_root='./data/val_set')
+train_loader = DataloaderLite (B=B, num_processes=ddp_world_size, process_rank=ddp_rank, split='train', data_root='./data/train_set')
+val_loader = DataloaderLite (B=B, num_processes=ddp_world_size, process_rank=ddp_rank, split='val', data_root='./data/val_set')
 
 # find number of images in training set, to define number of epochs as a function of batch size B (n_train_iamges/B)
 n_train_images = len(train_loader.tokens)
@@ -259,8 +273,10 @@ if ddp:
     # forward is unchanged, backward is mostly unchanged except there is overlap between computation and communication of gradients
     # while the backward pass is still going on, to average the gradients from all processes
     # we're tacking on this average as we will see in a bit
-    model = DDP (model, device_ids=[ddp_local_rank]) 
+    model = DDP (model, device_ids=[ddp_local_rank])
+    discriminator = DDP (discriminator, device_ids=[ddp_local_rank])
 raw_model = model.module if ddp else model
+raw_discriminator = discriminator.module if ddp else discriminator
 
 
 # PyTorch has it's own cosine decay learning rate scheduler
@@ -274,7 +290,7 @@ recon_util = DataUtils (Data_Utils_Config)
 
 # TODO: change these numbers later
 num_epochs = 100
-steps_per_epoch = n_train_images / B if n_train_images % B == 0 else (n_train_images // B) + 1
+#steps_per_epoch = n_train_images / B if n_train_images % B == 0 else (n_train_images // B) + 1
 steps_per_checkpoint = 300
 steps_per_eval = 50
 steps_per_inference = 250
@@ -290,6 +306,8 @@ assert steps_per_checkpoint % steps_per_eval == 0, f"we only checkpoint after ru
 # TODO: tweak LR later based on performance
 max_lr = 6e-4
 min_lr = 0.1 * max_lr
+
+steps_per_epoch = n_train_images // total_batch_size
 max_steps = num_epochs * steps_per_epoch
 def get_lr (it):
     # formality, this condition wont ever be triggered because our training stops at max steps, decay till decay time and then 10% of max LR can be specified by writing 
@@ -389,7 +407,7 @@ for step in range (start_step, max_steps):
                 with torch.autocast (device_type=device, dtype=torch.bfloat16):
                     # compute loss function has context of global variables like steps_per_epoch, num_epochs etc
                     vqgan_loss, d_loss = compute_loss (vqgan_model=model, discriminator=discriminator, perceptual_distinguisher=perceptual_distinguisher, x=x, perceptual_loss_factor=perceptual_loss_factor,
-                                                        rec_loss_factor=rec_loss_factor, step=step)
+                                                        rec_loss_factor=rec_loss_factor, current_step=step)
 
                 # we are not interested in batchwise summation but in batchwise average of losses
                 # and 20 val_loss 'mini" steps signify a batch
@@ -457,18 +475,80 @@ for step in range (start_step, max_steps):
                 }
             torch.save (checkpoint, checkpoint_path)
 
-    # once in a while represent an image in latent space and reconstruct from it
+    # once in a while transform images in latent space and reconstruct from the latent representation
     if (step > 0 and (step % steps_per_inference == 0 or last_step)):
         model.eval()
         num_reconstructions = 8
         inference_tokens = load_tokens (inference_shard_path)
         inference_tokens = inference_tokens[:num_reconstructions]
-        
+        inference_tokens = inference_tokens.to(device)
+
         current_step_results_path = f"{inference_results_path}/{step}"
         os.makedirs(current_step_results_path, exist_ok=True)
         recon_util.tensor_to_image (inference_tokens, current_step_results_path, "clone")
 
-        reconstructed_images, encoding_indices, vq_loss = model (infere)
+        with torch.no_grad():
+            with torch.autocast (device_type=device, dtype=torch.bfloat16):
+                reconstructed_images, encoding_indices, vqgan_loss = model (inference_tokens)
+            
+            if torch.min(reconstructed_images) < -1 or torch.max(reconstructed_images) > 1:
+                reconstructed_images = torch.tanh (reconstructed_images)
+            
+            recon_util.tensor_to_image (reconstructed_images, current_step_results_path, "neural")
+    
+    # Do one step of training optimization
+    model.train()
+    vqgan_loss_accum = 0.0
+    d_loss_accum = 0.0
+    vqgan_optimizer.zero_grad()
+    disc_optimizer.zero_grad()
+    for micro_step in range (grad_accum_steps):
+        x = train_loader.next_batch ()
+        # ship active image batch to GPU during training to be memory efficient
+        x = x.to(device)
+        # bfloat16 sorcery
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            is_zeroth_epoch = (train_loader.current_epoch == 0)
+            # generator net loss, discriminator loss
+            vqgan_loss, d_loss = compute_loss (vqgan_model=model, discriminator=discriminator, perceptual_distinguisher=perceptual_distinguisher, x=x, perceptual_loss_factor=perceptual_loss_factor,
+                                               rec_loss_factor=rec_loss_factor, current_step=step)
+        
+        # we have to scale down the losses to account for gradient accumulation
+        # since consecutive loss.backward() calls deposit/add gradients
+        # addition of gradients corresponds to SUM in objective
+        # we do not want summation of losses corresponding to mini batches, we want average (or MEAN) instead
+        # dividing losses by grad accum steps rectifies this, backward() deposits gradients corresponding to contribution of
+        # one mini batch to average loss for the TOTAL_BATCH_SIZE
+        vqgan_loss = vqgan_loss / grad_accum_steps
+        d_loss = d_loss / grad_accum_steps
+
+        # returns a tensor detached from computational graph, disable gradient tracking, still shares the underlying storage
+        vqgan_loss_accum += vqgan_loss.detach()
+        d_loss_accum += d_loss.detach()
+
+
+        # only sync gradients across the processes, at the end of the large batch
+        # hacky way to disable gradient sync for every single micro step
+        if ddp:
+            # very last backward will have the grad_sync flag as True
+            # for now this works, but not a good practice if pytorch takes the flag away
+            # averages gradients
+            model.require_backward_grad_sync = (micro_step == (grad_accum_steps - 1))
+            discriminator.require_backward_grad_sync = (micro_step == (grad_accum_steps - 1))
+        
+        vqgan_loss.backward (retain_graph=True)
+        disc_optimizer.zero_grad () # none
+        d_loss.backward()
+
+        safe_guard_d_grads = discriminator.model.weight.grad
+
+
+
+        
+            
+
+        
+    
 
 
         
