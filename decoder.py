@@ -8,7 +8,7 @@ from modules import ResidualBlock, Swish, GroupNorm, UpSampleBlock, SelfAttentio
 @dataclass
 class DecoderConfig:
     # general decode config
-    latent_dim : int = 1024
+    latent_dim : int = 256
     latent_res : int = 16
     image_res : int = 256
     n_expansions : int = 4 # (spatial resolution is expanded by 2^4)

@@ -71,17 +71,17 @@ class VQGan (nn.Module):
 
         return X_decoded, encoding_indices, vq_loss     
 
-    def compute_lambda (self, perceptual_loss, gan_loss):
+    def compute_lambda (self, perceptual_rec_loss, gan_loss):
         lambda_factor = None
 
         delta = 1e-6
         last_layer = self.decoder.model[-1]
         last_layer_weight = last_layer.weight
 
-        perceptual_loss_grad = torch.autograd.grad (perceptual_loss, last_layer_weight, retain_graph=True)[0] # to extract the value from (a,) tuple
+        perceptual_rec_loss_grad = torch.autograd.grad (perceptual_rec_loss, last_layer_weight, retain_graph=True)[0] # to extract the value from (a,) tuple
         gan_loss_grad = torch.autograd.grad (gan_loss, last_layer_weight, retain_graph=True)[0] # to extract the value from (a,) tuple
 
-        lambda_factor = torch.norm(perceptual_loss_grad) / (torch.norm(gan_loss_grad) + delta)
+        lambda_factor = torch.norm(perceptual_rec_loss_grad) / (torch.norm(gan_loss_grad) + delta)
         lambda_factor = torch.clamp (lambda_factor, 0, 1e4).detach()
         return 0.8 * lambda_factor
     
@@ -127,5 +127,5 @@ class VQGan (nn.Module):
         use_fused = fused_available and 'cuda' in device # or device == 'cuda'
         print (f"using fused AdamW:{use_fused}")
         # kernel fusion for AdamW update instead of iterating over all the tensors to step which is a lot slower.
-        optimizer = torch.optim.AdamW (optim_groups, learning_rate, betas=(0.9,0.95), eps=1e-8, use_fused=use_fused)
+        optimizer = torch.optim.AdamW (optim_groups, learning_rate, betas=(0.9,0.95), eps=1e-8, fused=use_fused)
         return optimizer

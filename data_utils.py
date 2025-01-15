@@ -22,7 +22,6 @@ class Data_Utils_Config:
     recon_types = {"clone", "neural"}
 
 
-
 class DataUtils:
     def __init__(self, util_config):
         self.util_config = util_config
@@ -33,77 +32,6 @@ class DataUtils:
     def reset (self):
         self.current_clone_recon_image = 0
         self.current_neural_recon_image = 0
-
-    # ------------------------------------------------------------------------------------------------------------------
-    # Process iamges in src_path and save them as npy shards in out_path, each shard containing batch_size images
-    # -------------------------------------------------------------------------------------------------------------------
-    def normalize_image(self, image):
-        """
-        Normalize image pixel values to be between -1 and 1.
-        
-        Parameters:
-            image (PIL.Image.Image): Image object to normalize.
-            
-        Returns:
-            np.ndarray: Normalized image array.
-        """
-        image_np = np.array(image).astype(np.float16)  # Convert to numpy array
-        return (image_np / 127.5) - 1.0  # Normalize to [-1, 1]
-
-    def normalized_images_to_shards(self, src_pre_procced, dest_shards, shard_batch_size):
-        """
-        Process images in the folder, normalize them, and save them into numpy shards.
-        
-        Parameters:
-            src_path (str): Folder containing the images.
-            batch_size (int): Number of images per shard.
-            out_path (str): Folder to save the .npy files.
-        """
-        # Ensure the output directory exists
-        os.makedirs(dest_shards, exist_ok=True)
-        
-        # Get all image files in the folder (supports .jpg, .png)
-        image_paths = glob.glob(os.path.join(src_pre_procced, "*.jpg")) + glob.glob(os.path.join(src_pre_procced, "*.png"))
-        random.shuffle(image_paths)
-        images = []  # List to store images for each batch
-        shard_index = 0  # Index for naming the .npy files
-        
-
-        # Iterate through all images
-        for image_path in image_paths:
-            if shard_index == 0:
-                shard_tag = "val"
-            else:
-                shard_tag = "train"
-            # Open image and convert to RGB
-            image = Image.open(image_path)
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-
-            # Normalize the image
-            normalized_image = self.normalize_image(image)
-            
-            # Add the image to the list
-            images.append(normalized_image)
-            
-            # If we reach batch size, save the batch and reset the list
-            if len(images) == shard_batch_size:
-                batch_array = np.stack(images)  # Stack images into a single numpy array (B, H, W, C)
-                np.save(os.path.join(dest_shards, f"shard_{shard_tag}_{shard_index:04d}.npy"), batch_array)
-                print(f"Saved shard {shard_index:03d} with {shard_batch_size} images.")
-                
-                # Reset for next batch
-                images = []
-                shard_index += 1
-        
-        # Save any remaining images (if batch size is not a perfect multiple)
-        if images: # images list is not empty, implies len(images) < shard_batch_size
-            batch_array = np.stack(images)
-            np.save(os.path.join(dest_shards, f"shard_{shard_tag}_{shard_index:04d}.npy"), batch_array)
-            print(f"Saved shard {shard_index:03d} with remaining images.")
-        
-        print(f"All images processed and saved in {dest_shards}.")
-
 
     # ------------------------------------------------------------------------------------------------------------------------------
     # Reconstruct image from a tensor (B, C, H, W) normalized to [-1,1] and store it to dest_path, with specified recon_type tag
@@ -146,61 +74,57 @@ class DataUtils:
 
 
     # ------------------------------------------------------------------------------------------------------------------------------
-    # Scale down the smaller res of images to 256
+    # TODO: Resizes the smallest dimension of the images in specified src to 256, maintainingthe aspect ratio, then takes center crop 256x256, converts to tensor
+    # normalizes to -1 and 1 and stores in shards to specified dest, each shard containing shard_batch_size images
     # ------------------------------------------------------------------------------------------------------------------------------
 
-
-    def preprocess_image(self, image_path):
-        """
-        Preprocess an image to maintain the original aspect ratio and apply a 256x256 center crop.
-        
-        Parameters:
-            image_path (str): Path to the input image.
-            
-        Returns:
-            PIL.Image.Image: Preprocessed image.
-        """
-        # Define the transformation to resize the smaller dimension and center crop to 256x256
-        transform = transforms.Compose([
-            transforms.Resize(self.util_config.downscale_res),  # Resize the smaller dimension to 256 (maintains aspect ratio)
-            transforms.CenterCrop(self.util_config.downscale_res)  # Center crop to 256x256
+    
+    def process_images_in_folder (self, src, dest, shard_batch_size):
+        assert os.path.exists (src)
+        transform = transforms.Compose ([
+            transforms.Resize (256), # downscale while maintaining aspect ratio
+            transforms.CenterCrop(256),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))  # Normalize to [-1, 1]
         ])
-        
-        # Load the image
-        image = Image.open(image_path)
-        
-        # Convert to RGB if the image is not already in RGB mode
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        
-        # Apply the transformations
-        processed_image = transform(image)
-        
-        return processed_image
 
-    def preprocess_images_in_folder(self, src, dest):
-        """
-        Process all images in a specified folder and save them after applying the preprocessing.
-        
-        Parameters:
-            input_folder (str): Folder containing the input images.
-            output_folder (str): Folder where the processed images will be saved.
-        """
-        # Create output folder if it doesn't exist
-        os.makedirs(src, exist_ok=True)
-        os.makedirs(dest, exist_ok=True)
-        
-        # Iterate through the images in the input folder
-        for i, file_name in enumerate(os.listdir(src)):
-            # Check for image files (can add more file types if needed)
-            if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image_path = os.path.join(src, file_name)
-                
-                # Preprocess the image
-                processed_image = self.preprocess_image(image_path)
-                
-                # Save the processed image to the output folder
-                output_path = os.path.join(dest, file_name)
-                processed_image.save(output_path)
-        print(f"{i+1} Images Processed and saved to: {dest} (assuming all were images in the 3 supported format)")
+        os.makedirs (dest, exist_ok=True)
 
+        # list all the images in the source
+        image_files = [os.path.join(src, i) for i in os.listdir(src) if i.lower().endswith(('png', 'jpg', 'jpeg'))]
+        random.shuffle (image_files)
+        shard = []
+        shard_index = 0
+    
+        for i, image_file in enumerate (image_files):
+            
+            if shard_index == 0:
+                shard_tag = 'val'
+            else:
+                shard_tag = 'train'
+            
+            try:
+                # open and transform the image
+                image = Image.open (image_file).convert('RGB') # Ensure all iamges are 3-Channel RGB
+                tensor = transform(image)
+                shard.append (tensor)
+
+                # save shard if it contains shard_batch_size images
+                if len(shard) == shard_batch_size:
+                    shard_tensor = torch.stack(shard) # stack images in the shard
+                    shard_path = os.path.join (dest, f"shard_{shard_tag}_{shard_index:04d}.npy")
+                    np.save (shard_path, shard_tensor.numpy())
+                    print (f"saved: shard_{shard_tag}_{shard_index:04d}")
+                    shard_index += 1
+                    shard = [] # reset buffer for next shard
+            except Exception as e:
+                print (f"Error processing {image_file} : {e}")
+        
+        # save remaining images to final shard
+        if len(shard) > 0:
+            shard_tensor = torch.stack (shard)
+
+            shard_path = os.path.join (dest, f"shard_{shard_tag}_{shard_index}.np   t")
+            np.save (shard_path, shard_tensor.numpy())
+            print(f"Final shard saved with {len(shard)} images.")
+        print (f"Shards saved in {dest}")

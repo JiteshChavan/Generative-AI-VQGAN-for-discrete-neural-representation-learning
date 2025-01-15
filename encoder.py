@@ -19,7 +19,7 @@ class EncoderConfig:
 
     # latent config
     latent_in_channels : int = 128
-    latent_dim : int = 1024 # TODO: check, and change later if needed
+    latent_dim : int = 256 # TODO: check, and change later if needed
 
     latent_resolution : int = 16 # on which we run attention
     
