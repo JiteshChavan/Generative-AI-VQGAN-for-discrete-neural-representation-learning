@@ -5,10 +5,10 @@ from dataclasses import dataclass
 
 @dataclass
 class QuantizerConfig:
-    vocab_size : int = 256
+    vocab_size : int = 2048
     # n_embd has to be same as encoder output latent_dim since we find difference
-    n_embd : int = 256
-    commitment_cost : int = 0.25
+    n_embd : int = 1024
+    commitment_cost : int = 0.5 # 0.25 earlier
 
 class Quantizer (nn.Module):
     def __init__(self, config):
@@ -53,6 +53,6 @@ class Quantizer (nn.Module):
         zq = zq.permute(0, 3, 1, 2).contiguous()
         # arrage latent representation (16x16) according to images in batch
         encoding_indices = encoding_indices.view(B, H*W) # (B, HW) or (B, 256)
-        return vq_loss, zq, encoding_indices
+        return vq_loss, encoding_indices, zq
 
 

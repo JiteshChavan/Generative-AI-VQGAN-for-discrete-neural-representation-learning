@@ -1,101 +1,84 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass
 
-from modules import ResidualBlock, Swish, GroupNorm, UpSampleBlock, SelfAttention
+
+from modules import ConvBlock, ConvBlockConfig
+from modules import GroupNorm
+
+from dataclasses import dataclass
 
 @dataclass
 class DecoderConfig:
-    # general decode config
-    latent_dim : int = 256
-    latent_res : int = 16
-    image_res : int = 256
-    n_expansions : int = 4 # (spatial resolution is expanded by 2^4)
-    n_pre_expansion_skip_connections : int = 3
-    image_channels : int = 3
-    penultimate_channels : int = 64
+    latent_channels : int = 1024
+    out_channels : int = 3 # image channels RGB
 
-    # conv kernel config
-    conv_kernel_size : int = 3
-    conv_stride : int = 1
-    conv_padding : int = 1
+    # make sure thats exact reverse of encoder config
+    # not scalable, make sure to change channel map to scale the model to higher latent_dimensions
+    channel_map = [512, 256, 128, 64]
+    n_expansions : int = 4
 
-    # Res block config
-    res_kernel_size : int = 3
-    res_stride : int = 1
-    res_padding : int = 1
-
-    # Self Attention Config
-    attention_resolution : int = 16 # latent resolution
-    n_head : int = 4
-    att_kernel_size : int = 1
-    att_stride : int = 1
-    att_padding : int = 0
-
-    # proj config
-    proj_kernel_size : int = 1
-    proj_stride : int = 1
-    proj_padding : int = 0
-
-    # UpSample config
-    up_sample_factor : int = 2
-    up_sample_kernel_size : int = 3
-    up_sample_stride : int = 1
-    up_sample_padding : int = 1
-
-    # res block channel up configs
-    channel_up_kernel_size : int = 1
-    channel_up_stride : int = 1
-    channel_up_padding : int = 0
+    kaiming_init_gain : float = 1.0
 
 
-class Decoder(nn.Module):
+class Decoder (nn.Module):
     def __init__(self, config):
         super().__init__()
+
         self.config = config
+        self.kaiming_init_gain = config.kaiming_init_gain
 
-        #  TODO: UPDATE this thing "n_pre_expansion_skip_connections" in config if you want to add more skip connections pre expansion, res has 1 skip conn, selfatt has 1 as well
-        layers = []
-        initial_conv = nn.Conv2d (self.config.latent_dim, self.config.latent_dim, kernel_size=self.config.conv_kernel_size, stride=self.config.conv_stride, padding=self.config.conv_padding)
-        layers.append(initial_conv)
-        layers.append(ResidualBlock (self.config.latent_dim, self.config.latent_dim, self.config))
-        layers.append (SelfAttention(self.config.latent_dim, self.config))
-        layers.append(ResidualBlock (self.config.latent_dim, self.config.latent_dim, self.config))
+        self.block = nn.ModuleList ()
 
-        # init setup for channels
-        in_channels = self.config.latent_dim
-        out_channels = in_channels // 2
-        for i in range (self.config.n_expansions):
-            if i == 0:
-                out_channels = in_channels
+        # deconv bvlock then match then double convblock
+        for stage in config.channel_map:
+            # expands spatial resolution by factor of 2 and halves the number of channels at the same time
+            self.block.append (nn.ConvTranspose2d(2*stage, stage, kernel_size=2, stride=2))
+            self.block.append (ConvBlock (2*stage, stage, ConvBlockConfig))
+
+        self.to_image_conv = ConvBlock (stage, config.out_channels, ConvBlockConfig, num_groups=1)
+        self.final_group_norm = GroupNorm (config.out_channels, num_groups=1)
+        self.tanh = nn.Tanh()
+
+        self.apply (self._init_weights)
+    
+    def _init_weights (self, module):
+        if isinstance (module, nn.Conv2d):
+            fan_in = nn.init._calculate_correct_fan (module.weight, mode='fan_in')
+            std = (self.kaiming_init_gain / fan_in)**-0.5
+
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+    def forward (self, skip_connections, x):
+        # hacky be careful
+        skip_connections.reverse()
+        activation = x
+
+        for i in (range (len (self.block))):
+
+            if i % 2 == 0:
+                # expand spatial, half channels with conv transpose
+                upsampled = self.block[i](activation)
+                assert (skip_connections[i//2].size(1) == upsampled.size(1))
+                # add skip connections for inductive bias
+                informed_activation = torch.cat ((skip_connections[i//2], upsampled), dim=1)
+                activation = informed_activation
+
+                del upsampled
             else:
-                in_channels = out_channels
-                out_channels = in_channels // 2
-            
-            # res and channel map
-            #       0       1       2       3
-            # dim   1024    512     256     128 -> collapse after loop to 3
-            # res   32      64      128     256
-            layers.append (ResidualBlock(in_channels, out_channels, self.config))
-            layers.append (UpSampleBlock(out_channels, self.config, self.config.up_sample_factor))
+                # send to convblock
+                activation = self.block[i](activation)
         
-        layers.append (GroupNorm(out_channels))
-        layers.append(Swish())
-        # Here res = 256, channels = 128 (antisymmetric to encoder)
-        layers.append(nn.Conv2d (out_channels, self.config.penultimate_channels, kernel_size=self.config.conv_kernel_size, stride=self.config.conv_stride, padding=self.config.conv_padding))
-        collapse_conv = nn.Conv2d (self.config.penultimate_channels, self.config.image_channels, kernel_size=self.config.conv_kernel_size, stride=self.config.conv_stride, padding=self.config.conv_padding)
-        layers.append(collapse_conv)
+        activation = self.to_image_conv (activation)
+        activation = self.final_group_norm (activation)
 
-        self.model = nn.Sequential (*layers)
+        image = self.tanh (activation)
 
-    def forward (self, X):
-        image = self.model(X)
+        # not maintaining state so dont need this
+        #del skip_connections[:]
+        #torch.cuda.empty_cache()
         return image
-        
-        
-
-        
-
 
 
