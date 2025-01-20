@@ -8,7 +8,7 @@ class QuantizerConfig:
     vocab_size : int = 2048
     # n_embd has to be same as encoder output latent_dim since we find difference
     n_embd : int = 1024
-    commitment_cost : int = 0.5 # 0.25 earlier
+    commitment_cost : int = 0.25 
 
 class Quantizer (nn.Module):
     def __init__(self, config):
@@ -17,6 +17,8 @@ class Quantizer (nn.Module):
 
         # codebook
         self.codebook = nn.Embedding (config.vocab_size, config.n_embd)
+
+   
 
     # X is encoder output # (B, latent_channels, latent_res, latent_res) -> (B, C, H, W)
     def forward (self, ze):

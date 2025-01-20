@@ -30,6 +30,39 @@ class ResBlockConfig:
     res_stride : int = 1
     res_padding : int = 0
 
+@dataclass
+class ResNetResBlockConfig:
+
+    kernel_size : int = 3
+    stride : int = 1
+    padding : int = 1
+
+    proj_k_size : int = 1
+    proj_stride : int = 1
+    proj_padding : int = 0
+
+@dataclass
+class MaxPoolSkipResNetResBlockConfig:
+
+    kernel_size : int = 1
+    stride : int = 1
+    padding : int = 0
+
+    proj_k_size : int = 1
+    proj_stride : int = 1
+    proj_padding : int = 0
+
+@dataclass
+class UpSampleSkipResNetResBlockConfig:
+
+    kernel_size : int = 1
+    stride : int = 1
+    padding : int = 0
+
+    proj_k_size : int = 1
+    proj_stride : int = 1
+    proj_padding : int = 0
+
 
 class ConvBlock (nn.Module):
 
@@ -135,3 +168,40 @@ class ResidualBlock (nn.Module):
 
     def forward (self, x):
         return x + self.block(x)
+    
+class ResNetResBlock (nn.Module):
+    def __init__ (self, in_channels, out_channels, config, num_groups = 8):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        kernel_size = config.kernel_size
+        stride =config.stride
+        padding = config.padding
+
+
+        layers = [
+            nn.Conv2d (in_channels, out_channels, kernel_size, stride, padding),
+            GroupNorm (out_channels, num_groups),
+            nn.GELU(),
+            nn.Conv2d (out_channels, out_channels, kernel_size, stride, padding),
+            GroupNorm (out_channels, num_groups),
+            nn.GELU()
+        ]
+
+        self.conv_projection = nn.Conv2d (out_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        self.conv_projection.SKIP_CONNECTION_SCALE_INIT = 1
+        layers.append (self.conv_projection)
+
+        self.block = nn.Sequential (*layers)
+
+        if in_channels != out_channels:
+            self.channel_up = nn.Conv2d (in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        
+    def forward (self, x):
+        if (self.in_channels == self.out_channels):
+            return x + self.block(x)
+        else:
+            return self.channel_up(x) + self.block(x)
+
+
