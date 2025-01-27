@@ -9,6 +9,8 @@ from modules import UpSampleSkipResNetResBlockConfig
 
 from modules import SelfAttention, SelfAttentionConfig
 from modules import GroupNorm
+from modules import ResNetResBlockCustom, ResNetResBlockCustomConfig
+
 
 @dataclass
 class ResNetDecoderConfig:
@@ -17,6 +19,9 @@ class ResNetDecoderConfig:
 
     channel_map = [512, 256, 128, 64]
     n_expansions : int = 4
+
+    n_blocks : int = len(channel_map) # 4 in this case
+    skips_per_block : int = 2
 
     # calculate n_skip additions
     # skip additions = len(self.block) / 2 + 1 for bottleneck attention + 1 for bottleneck feed forward + 1 for to image conv
@@ -43,6 +48,8 @@ class ResNetDecoder (nn.Module):
             
             self.block.append(nn.ConvTranspose2d (in_channels, stage, kernel_size=2, stride=2) )
             self.block.append(ResNetResBlock (stage, stage, ResNetResBlockConfig, num_groups=num_groups))
+            self.block.append (ResNetResBlockCustom (stage, 2*stage, ResNetResBlockCustomConfig, num_groups)) # goes from in 2in in
+
             in_channels = stage
         
         self.to_image_conv = ResNetResBlock (config.channel_map[-1], config.image_channels, ResNetResBlockConfig, num_groups=1)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from modules import ResNetResBlock, ResNetResBlockConfig
 from modules import SelfAttention, SelfAttentionConfig
-
+from modules import ResNetResBlockCustom, ResNetResBlockCustomConfig
 
 @dataclass
 class ResNetEncoderConfig:
@@ -44,11 +44,17 @@ class ResNetEncoder (nn.Module):
         for stage in config.channel_map:
             if stage == 64:
                 num_groups = 8
+                custom_groups = 1 # groups for thinking layer
             elif stage == 128:
-                num_groups = 16
+                num_groups = 8
+                custom_groups = num_groups
+
             else:
                 num_groups = 32
-
+                custom_groups = num_groups
+            # objective 3 - 64
+            # 3 6in 6in 3in -> 3 64
+            self.block.append (ResNetResBlockCustom (in_channels, 2*in_channels, ResNetResBlockCustomConfig, num_groups=custom_groups))
             self.block.append (ResNetResBlock (in_channels, stage, ResNetResBlockConfig, num_groups=num_groups))
             in_channels = stage
         
@@ -70,7 +76,8 @@ class ResNetEncoder (nn.Module):
         activation = x
         for i in range (len(self.block)):
             activation = self.block[i](activation)
-            activation = self.down_sample_max_pool (activation)
+            if i % 2 == 0:
+                activation = self.down_sample_max_pool (activation)
         
         # 1024 channels
         activation = self.bottleneck (activation) # 16, 1024

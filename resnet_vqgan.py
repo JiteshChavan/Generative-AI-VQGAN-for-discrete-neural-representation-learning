@@ -36,7 +36,7 @@ class VQGan (nn.Module):
             std = (self.kaiming_init_gain / fan_in)**0.5
 
             if hasattr (module, "SKIP_CONNECTION_SCALE_INIT"):
-                std *= (len(self.encoder.block) + 3 + (len(self.decoder.block) / 2) + 3) ** -0.5
+                std *= (len(self.encoder.block) + 3 + (self.decoder.config.n_blocks * self.decoder.config.skips_per_block) + 3) ** -0.5
 
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
@@ -116,5 +116,5 @@ class VQGan (nn.Module):
         print (f"using fused AdamW:{use_fused}")
 
         # kernel fusion for AdamW update instead of iterating over all the tensors to step which is a lot slower.
-        optimizer = torch.optim.AdamW (optim_groups, lr=learning_rate, betas=(0.9,0.95), eps=1e-8, fused=use_fused)
+        optimizer = torch.optim.AdamW (optim_groups, lr=learning_rate, betas=(0.5,0.9), eps=1e-8, fused=use_fused)
         return optimizer

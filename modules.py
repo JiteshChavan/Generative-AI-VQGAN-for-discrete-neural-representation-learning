@@ -205,3 +205,40 @@ class ResNetResBlock (nn.Module):
             return self.channel_up(x) + self.block(x)
 
 
+@dataclass
+class ResNetResBlockCustomConfig:
+    kernel_size : int = 3
+    stride : int = 1
+    padding : int = 1
+
+
+
+class ResNetResBlockCustom (nn.Module):
+    def __init__ (self, in_channels, intermediate_channels, config, num_groups=8):
+        super().__init__()
+        self.config = config
+
+        layers = [
+            nn.Conv2d (in_channels, intermediate_channels, config.kernel_size, config.stride, config.padding),
+            GroupNorm (intermediate_channels, num_groups),
+            nn.GELU(),
+            nn.Conv2d (intermediate_channels, in_channels, config.kernel_size, config.stride, config.padding),
+            GroupNorm (in_channels, num_groups),
+            nn.GELU()
+        ]
+
+        self.conv_projection = nn.Conv2d (in_channels, in_channels, kernel_size=1, stride=1, padding=0) # projection
+        self.conv_projection.SKIP_CONNECTION_SCALE_INIT = 1
+        layers.append (self.conv_projection)
+
+        self.block = nn.Sequential (*layers)
+
+
+        # no need for channel up since in channels is adding to in channels
+
+    def forward (self, x):
+        return x + self.block(x)
+
+        
+
+

@@ -28,8 +28,12 @@ class Discriminator (nn.Module):
         self.config = config
 
         layers = []
-        self.in_conv = nn.Conv2d (config.image_channels, config.latent_in_channels, kernel_size=config.disc_kernel_size, stride=config.disc_stride, padding=config.disc_padding)
-        layers.append (self.in_conv)
+        
+        # Apply spectral norm to the input convolution
+        self.in_conv = nn.utils.spectral_norm(
+            nn.Conv2d(config.image_channels, config.latent_in_channels, kernel_size=config.disc_kernel_size, stride=config.disc_stride, padding=config.disc_padding)
+        )  # <- Added spectral norm here
+        layers.append(self.in_conv)
 
         # channels map
         # res map
@@ -39,33 +43,44 @@ class Discriminator (nn.Module):
         out_channels = 2 * in_channels
 
         LAST_LAYER = config.n_layers - 1
-        for i in range (config.n_layers):
+        for i in range(config.n_layers):
             if i == LAST_LAYER:
                 stride = 1
             else:
                 stride = config.disc_stride
-            layers.append (nn.Conv2d(in_channels, out_channels, kernel_size=config.disc_kernel_size, stride=stride, padding=config.disc_padding))
-            layers.append (GroupNorm (out_channels))
-            layers.append (nn.LeakyReLU(0.1, inplace=True))
+
+            # Apply spectral norm to each convolution
+            layers.append(
+                nn.utils.spectral_norm(
+                    nn.Conv2d(in_channels, out_channels, kernel_size=config.disc_kernel_size, stride=stride, padding=config.disc_padding)
+                )  # <- Added spectral norm here
+            )
+            layers.append(GroupNorm(out_channels))
+            layers.append(nn.LeakyReLU(0.1, inplace=True))
             in_channels = out_channels
             out_channels = 2 * in_channels
         
-        layers.append (nn.Conv2d(in_channels, 1, kernel_size=config.disc_kernel_size, stride=config.disc_last_layer_stride, padding=config.disc_padding))
+        # Apply spectral norm to the last convolution
+        layers.append(
+            nn.utils.spectral_norm(
+                nn.Conv2d(in_channels, 1, kernel_size=config.disc_kernel_size, stride=config.disc_last_layer_stride, padding=config.disc_padding)
+            )  # <- Added spectral norm here
+        )
 
         self.model = nn.Sequential(*layers)
 
         # kaiming init sorcery
         self.apply(self._init_weights)
     
-    def forward (self, X):
+    def forward(self, X):
         return self.model(X)
     
-    def _init_weights (self, module):
-        if isinstance (module, nn.Conv2d):            
+    def _init_weights(self, module):
+        if isinstance(module, nn.Conv2d):            
             # u = 0, calculate sigma such that weights should be initialized from that N(u, sigma) according to Kaiming init
-            fan_in = nn.init._calculate_correct_fan (module.weight, mode='fan_in')
+            fan_in = nn.init._calculate_correct_fan(module.weight, mode='fan_in')
             std = (self.config.kaiming_init_gain / fan_in) ** 0.5       
-            nn.init.normal_ (module.weight, mean=0.0, std=std) # optional generator can be passed for debugging
+            nn.init.normal_(module.weight, mean=0.0, std=std)  # optional generator can be passed for debugging
 
 
     # ---------------------------------------------------------------------------------------------------------------------------------
@@ -79,10 +94,10 @@ class Discriminator (nn.Module):
     # sort of a force against the optimization that pulls down the weights and makes the network use more of the weights, distributing the task across multiple channels if you would,
     # to achieve the activations, basically regularization
 
-    def configure_optimizers (self, weight_decay, learning_rate, device):
+    def configure_optimizers(self, weight_decay, learning_rate, device):
         # start with all parameters that require gradients
-        param_dict = {pn:p for pn,p in self.named_parameters()}
-        param_dict = {pn:p for pn,p in param_dict.items() if p.requires_grad}
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
         
         # create optim groups. Any parameter that is 2D will be weight decayed, otherwise no.
         # i.e. all tensors in matmul + embeddings decay, all biases and layer norms don't
@@ -90,25 +105,20 @@ class Discriminator (nn.Module):
         no_decay_params = [p for pn, p in param_dict.items() if p.dim() < 2]
 
         optim_groups = [
-            {'params' : decay_params, 'weight_decay' : weight_decay},
-            {'params' : no_decay_params, 'weight_decay' : 0.0}
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0}
         ]
 
-        num_decay_params = sum (p.numel () for p in decay_params)
-        num_no_decay_params = sum (p.numel () for p in no_decay_params)
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_no_decay_params = sum(p.numel() for p in no_decay_params)
 
-        print (f"optimizer_configuration for DISCRIMINATOR model:\n num decayed parameter tensors:{len(decay_params)} with {num_decay_params} parameters")
-        print (f"num non-decayed parameter tensors:{len(no_decay_params)} with {num_no_decay_params} parameters")
+        print(f"optimizer_configuration for DISCRIMINATOR model:\n num decayed parameter tensors:{len(decay_params)} with {num_decay_params} parameters")
+        print(f"num non-decayed parameter tensors:{len(no_decay_params)} with {num_no_decay_params} parameters")
 
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and 'cuda' in device # or device == 'cuda'
-        print (f"using fused AdamW:{use_fused}")
+        use_fused = fused_available and 'cuda' in device  # or device == 'cuda'
+        print(f"using fused AdamW:{use_fused}")
         # kernel fusion for AdamW update instead of iterating over all the tensors to step which is a lot slower.
-        optimizer = torch.optim.AdamW (optim_groups, learning_rate, betas=(0.5,0.9), eps=1e-8, fused=use_fused)
+        optimizer = torch.optim.AdamW(optim_groups, learning_rate, betas=(0.5, 0.9), eps=1e-8, fused=use_fused)
         return optimizer
-            
-
-    
-
-
