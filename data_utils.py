@@ -114,7 +114,7 @@ class DataUtils:
                     shard_tensor = torch.stack(shard) # stack images in the shard
                     shard_path = os.path.join (dest, f"shard_{shard_tag}_{shard_index:04d}.npy")
                     np.save (shard_path, shard_tensor.numpy())
-                    print (f"saved: shard_{shard_tag}_{shard_index:04d} with {len(shard)} images")
+                    print (f"saved: shard_{shard_tag}_{shard_index:04d}")
                     shard_index += 1
                     shard = [] # reset buffer for next shard
             except Exception as e:

@@ -1,4 +1,9 @@
 # Image synthesis using VQGAN
+
+# Model Specifications:
+- VQGAN : 108M parameters
+- GPT Transformer model for autoregressive generations : 91.5M parameters
+
 ## VQGAN: Discrete Neural Representation Learning Model for Generative Downstream Tasks
 - Vector Quantized Generative Adversarial Networks (**VQGAN**s) is a generative model architecture that utilises Vector Quantized Variational Auto Encoder (**VQVAE**) which learns how to represent images in a lower dimensional latent space in an **autoencoder** like fashion, discretize the latent space representation of images using a codebook (hence the vector quantized part) and finally how to reconstruct the original image using this quantized latent representation. The optimization objective for reconstruction could be either L2 or L1 losses between reconstruction and original image in pixel space.
 - The encoder and decoder used in the VQVAE architecture are fully convolutional, which are responsible for translating the image into latent space, quantizing the continuous latent representation and reconstructing from the quantized latent representation respectively.
@@ -26,6 +31,10 @@
 ![](./plots/discriminatorLoss.png)
 
 ### Results for second stage (Generation):
+#### Blind Generations (Only start token as initial context to the transformer):
+![](./plots/blindGenerations.png)
+#### Generated Samples : Context Completion (Top half of image as initial context to the transformer):
+![](./plots/halfContextGenerations.png)
 
 ###### GPT autoregressive modeling Loss:
 ![](./plots/gpt_loss.png)
@@ -54,7 +63,9 @@
       torchrun --standalone --nproc_per_node=1 train_gpt.py
 ```
 - To resume training from a specific checkpoint, set the fresh_run flag to false and specify path of the checkpoint from which training is to be resumed
+- gpt_inference_play.ipynb has a demo on how to perform inference. Note that images do have to be shardified using shardify.py and image_quantizer.py and then fed into the model as evident from the demo notebook.
 - The training scripts for both the stages ensure that model checkpoints are saved periodically, specified by "steps_per_checkpoint" in train_resnet_vqgan.py and train_gpt.py. The checkpoints are stored in the specified log_dir.
+
 ## Citation
 ```bibtex
 @misc{esser2021taming,
