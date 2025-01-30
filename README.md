@@ -34,8 +34,7 @@
 
 ### Second Stage (autoregressive modeling of true latent distribution):
 #### Blind Generations (Only start token as initial context to the transformer):
-![](./plots/blindGenerations1.png)
-![](./plots/blindGenerations2.png)
+![](./plots/blindGenerations.png)
 #### Generated Samples : Context Completion (Top half of image as initial context to the transformer):
 ![](./plots/halfContextGenerations.png)
 
