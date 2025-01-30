@@ -6,6 +6,51 @@ from dataclasses import dataclass
 from torch.utils.tensorboard import SummaryWriter
 
 # ------------------------------------------------------
+# Macros and Hyperparameters
+
+# How many images to forward across all the GPUs (ddp_worldsize*) before updating weights?
+# Single GPU forwards B images in one forward pass
+# ensemble of GPUs forwards ddp_worldsize * B images in one forward pass
+# desirable to have total batch size (total images forwarded per gradient step) to be integral multiple of ddp_world_size * B
+
+# after n ddp forward passes we do one update i.e. total batch size is 4 * ddp world size * batchSize
+# basically grad accum steps
+# batch size (images in a batch)
+B = 4
+# total batch size as number of tokens processed per backward update
+
+# with current setup our total batch size is 4 * 8 * 32 = 1024 images processed per gradient step
+total_batch_size = 4
+
+# specify path to shards
+src_shards = "./shards"
+
+
+# TODO: change these numbers later
+num_epochs = 5000
+
+steps_per_checkpoint = 1000
+steps_per_eval = 50
+steps_per_inference = 1000
+
+inference_shard_path = "./shards/shard_train_0001.npy"
+inference_results_path = "./resnet_results"
+
+max_lr_vqgan = 6e-4
+min_lr_vqgan = 0.5 * max_lr_vqgan
+lr_discriminator = 2.5e-5
+
+rec_loss_factor = 1.0
+perceptual_loss_factor = 1.0
+d_loss_factor = 1.0
+
+# create the log directory we will write checkpoints to and log to
+log_dir = "resnet_logs"
+
+# TODO: change the flag to load from previous checkpoints
+fresh_run = False
+resume_from_checkpoint = "./resnet_logs/model_78000.pt"
+# --------------------------------------------------------
 # data loader configs
 import os
 import numpy as np
@@ -176,19 +221,7 @@ torch.manual_seed (1337)
 if torch.cuda.is_available ():
     torch.cuda.manual_seed(1337)
 
-# How many images to forward across all the GPUs (ddp_worldsize*) before updating weights?
-# Single GPU forwards B images in one forward pass
-# ensemble of GPUs forwards ddp_worldsize * B images in one forward pass
-# desirable to have total batch size (total images forwarded per gradient step) to be integral multiple of ddp_world_size * B
 
-# after n ddp forward passes we do one update i.e. total batch size is 4 * ddp world size * batchSize
-# basically grad accum steps
-# batch size (images in a batch)
-B = 4
-# total batch size as number of tokens processed per backward update
-
-# with current setup our total batch size is 4 * 8 * 32 = 1024 images processed per gradient step
-total_batch_size = 4
 
 assert total_batch_size % (ddp_world_size * B) == 0, f"make sure total batch size is divisible by (B*T * ddp_world_size)"
 grad_accum_steps = total_batch_size // (ddp_world_size * B) # each process will do B*T and theres ddp_world_size processes
@@ -199,7 +232,7 @@ if master_process: # then guard this
     print (f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
 
-src_shards = "./shards"
+
 assert os.path.exists(src_shards), f"shard path doesnt exist"
 
 train_loader = DataloaderLite (B=B, num_processes=ddp_world_size, process_rank=ddp_rank, split='train', data_root=src_shards)
@@ -251,17 +284,6 @@ from data_utils import DataUtils, Data_Utils_Config
 shard_util = DataUtils (Data_Utils_Config)
 
 
-# TODO: change these numbers later
-num_epochs = 5000
-#steps_per_epoch = n_train_images / B if n_train_images % B == 0 else (n_train_images // B) + 1
-steps_per_checkpoint = 1000
-steps_per_eval = 50
-steps_per_inference = 1000
-
-
-# TODO: try to incorporate inference from both train and val shards
-inference_shard_path = "./shards/shard_train_0001.npy"
-inference_results_path = "./resnet_results"
 
 os.makedirs (inference_results_path, exist_ok=True)
 assert os.path.exists (inference_shard_path), f"No inference shard found!\n"
@@ -277,9 +299,7 @@ assert steps_per_checkpoint % steps_per_eval == 0,  f"we are only doing checkpoi
 # --------------------------------------------------------------------------------------------------------------
 #   Optimization configurations (LR schedules)
 # --------------------------------------------------------------------------------------------------------------
-max_lr_vqgan = 6e-4
-min_lr_vqgan = 0.5 * max_lr_vqgan
-lr_discriminator = 2.5e-5
+
 
 steps_per_epoch = n_train_images // total_batch_size
 max_steps = num_epochs * steps_per_epoch
@@ -309,10 +329,7 @@ def get_lr (it, model):
 
 # --------------------------------------------------------------------------------------------------------------
 
-# TODO: merge all hyper parameters in a dataclass
-rec_loss_factor = 1.0
-perceptual_loss_factor = 1.0
-d_loss_factor = 1.0
+
 
 # Optimize!!!
 # First try to crush and overfit a batch
@@ -323,8 +340,7 @@ vqgan_optimizer = raw_vqgan.configure_optimizers (weight_decay=0.1, learning_rat
 # discriminator_optimizer has access to discriminator parameters only
 disc_optimizer = raw_discriminator.configure_optimizers (weight_decay=0.1, learning_rate=lr_discriminator, device=device)
 
-# create the log directory we will write checkpoints to and log to
-log_dir = "resnet_logs"
+
 writer = SummaryWriter(log_dir=log_dir)
 if master_process:
     os.makedirs (log_dir, exist_ok=True)
@@ -334,8 +350,7 @@ if master_process:
     # directory to save results in
     os.makedirs("resnet_results", exist_ok=True)
 
-# TODO: change the flag to load from previous checkpoints
-fresh_run = False
+
 
 if fresh_run:
     start_step = 0
@@ -345,7 +360,6 @@ if fresh_run:
     
 else:
     # TODO: change this to manually specify training checkpoint
-    resume_from_checkpoint = "./resnet_logs/model_78000.pt"
     if master_process:
         print (f"Resuming from checkpoint : {resume_from_checkpoint}")
     assert os.path.exists (resume_from_checkpoint), f"no checkpoint file:{resume_from_checkpoint} found"
