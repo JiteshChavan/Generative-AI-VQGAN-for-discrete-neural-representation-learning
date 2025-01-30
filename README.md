@@ -69,6 +69,9 @@
 - gpt_inference_play.ipynb has a demo on how to perform inference. Note that images do have to be shardified using shardify.py and image_quantizer.py and then fed into the model as evident from the demo notebook.
 - The training scripts for both the stages ensure that model checkpoints are saved periodically, specified by "steps_per_checkpoint" in train_resnet_vqgan.py and train_gpt.py. The checkpoints are stored in the specified log_dir.
 
+## To do list:
+- [ ] Implement super resolution render using sliding attention window
+
 ## Citation
 ```bibtex
 @misc{esser2021taming,
