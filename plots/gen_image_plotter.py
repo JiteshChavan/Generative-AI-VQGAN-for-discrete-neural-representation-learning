@@ -9,11 +9,10 @@ def plot_images(folder_path):
         print("No images found in the folder.")
         return
     
-    images = [Image.open(os.path.join(folder_path, img)) for img in image_files]
+    images = [Image.open(os.path.join(folder_path, img)) for img in image_files[:12]]  # Limit to 12 images
     
-    fig, axes = plt.subplots(1, len(images), figsize=(len(images) * 3, 3))
-    if len(images) == 1:
-        axes = [axes]
+    fig, axes = plt.subplots(2, 6, figsize=(18, 6))  # 2 rows, 6 columns
+    axes = axes.flatten()
     
     for ax, img in zip(axes, images):
         ax.imshow(img)
@@ -23,7 +22,7 @@ def plot_images(folder_path):
     plt.show()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot images in a folder in a single row.")
+    parser = argparse.ArgumentParser(description="Plot images in a folder in two rows, each containing 6 images.")
     parser.add_argument("folder", type=str, help="Path to the folder containing images")
     args = parser.parse_args()
     

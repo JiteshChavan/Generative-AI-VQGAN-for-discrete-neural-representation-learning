@@ -11,32 +11,36 @@
 - The neural representation learning task is further guided by Perceptual Loss component from a pretrained **Learned Perceptual Image Patch Similarity model** and Adversarial Loss component from a **Patch Discriminator**, which incentivizes the model to minimize abstract divergence between reconstructions and original images in latent space and ensures that outputs are better aligned with realistic image distribution respectively.
 - Both encoder and decoder are designed upon slight variation of convolutional **Res-Net** block architecture.
 - The quantization operation is reparametrized so that gradients can flow back into the encoder from supervision.
-
 - The overall objective for finding optimal neural representation model:
 ![](./plots/optimizationObjective.png)
+
+- After having optimized the discrete neural representation model, an autoregressive GPT model is trained to sample from the true distribution approximated as chained posteriors, each being categorical softmax distribution over vocab_size with the learned prior subjected to causal context.
+
 
 - The architecture was introduced in [Taming Transformers for High-Resolution Image Synthesis](https://arxiv.org/abs/2012.09841)
 
 
-### Results for first stage (Reconstruction):
+### First stage (Discrete Neural Representation Learning):
 #### Epoch 1:
 ![](./plots/epoch0.png)
 #### Epoch 50:
 ![](./plots/epoch50.png)
 
-#### Stage 1 Training Graph
+#### Stage 1 Training
 ###### VQGAN Loss:
 ![](./plots/vqganLoss.png)
 ###### Discriminator Loss:
 ![](./plots/discriminatorLoss.png)
 
-### Results for second stage (Generation):
+### Second Stage (autoregressive modeling of true latent distribution):
 #### Blind Generations (Only start token as initial context to the transformer):
-![](./plots/blindGenerations.png)
+![](./plots/blindGenerations1.png)
+![](./plots/blindGenerations2.png)
 #### Generated Samples : Context Completion (Top half of image as initial context to the transformer):
 ![](./plots/halfContextGenerations.png)
 
-###### GPT autoregressive modeling Loss:
+#### 
+###### GPT training Cross Entropy Loss:
 ![](./plots/gpt_loss.png)
 
 
