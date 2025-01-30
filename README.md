@@ -1,5 +1,5 @@
 # Image synthesis using VQGAN
-
+###### Special thanks to master Andrej Karpathy for being an amazing teacher/knowledge transfer person.
 # Model Specifications:
 - VQGAN : 108M parameters
 - GPT Transformer model for autoregressive generations : 91.5M parameters
